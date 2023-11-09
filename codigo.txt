@@ -1,0 +1,783 @@
+Backend
+├── dist 
+├── node_modules
+├── src
+│   ├── controllers
+│   │   ├── authentication
+│   │	│    ├── /singin
+│   │   │    │    └── singinController.ts:
+│   │	│    ├── /login
+│   │   │    │    └── loginController.ts:import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
+import { Auth } from '../../../models/authModel';
+import jwt from 'jsonwebtoken';
+import { errorMessages, successMessages } from '../../../middleware/messages';
+import { Verification } from '../../../models/verificationModel';
+
+
+const MAX_LOGIN_ATTEMPTS = 5; // Número máximo de intentos fallidos antes del bloqueo
+
+// Función para manejar el inicio de sesión de un usuario
+export const loginUser = async (req: Request, res: Response) => {
+  const { username, passwordorrandomPassword } = req.body; // Obtener el nombre de usuario y la contraseña de la solicitud
+
+  try {
+    // Buscar al usuario en la base de datos
+    const user: any = await Auth.findOne({ 
+      where: { username: username },
+      include: [Verification] // Incluir información de verificación asociada al usuario
+    });
+
+    // Si el usuario no existe, devolver un mensaje de error
+    if (!user) {
+      return res.status(400).json({
+        msg: errorMessages.userNotExists(username),
+      });
+    }
+
+    // Verificar si el correo electrónico del usuario está verificado
+    if (!user.verification.isEmailVerified) {
+      return res.status(400).json({
+        msg: errorMessages.userNotVerified,
+      });
+    }
+
+    // Verificar si el teléfono del usuario está verificado
+    if (!user.verification.isPhoneVerified) {
+      return res.status(400).json({
+        msg: errorMessages.phoneVerificationRequired,
+      });
+    }
+
+    // Verificar si el usuario ha excedido el número máximo de intentos de inicio de sesión
+    if (user.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+      const currentDate = new Date();
+      if (user.verification.blockExpiration && user.verification.blockExpiration > currentDate) {
+        const timeLeft = Math.ceil((user.verification.blockExpiration.getTime() - currentDate.getTime()) / (60 * 1000));
+        return res.status(400).json({
+          msg: `La cuenta está bloqueada temporalmente debido a múltiples intentos fallidos. Inténtalo de nuevo más tarde. Tiempo restante: ${timeLeft} minutos`,
+        });
+      } else {
+        // Bloquear la cuenta nuevamente si el bloqueo ha expirado
+        await lockAccount(username);
+      }
+    }
+
+    let passwordValid = false;
+    if (passwordorrandomPassword.length === 8) {
+      passwordValid = passwordorrandomPassword === user.verification.randomPassword;
+    } else {
+      passwordValid = await bcrypt.compare(passwordorrandomPassword, user.password);
+    }
+
+    // Si la contraseña no es válida
+    if (!passwordValid) {
+      const updatedLoginAttempts = (user.verification.loginAttempts || 0) + 1;
+    
+      await Verification.update(
+        { loginAttempts: updatedLoginAttempts }, // Actualizar loginAttempts en la tabla Verification
+        { where: { userId: user.id } } 
+      );
+    
+      // Si se excede el número máximo de intentos, bloquear la cuenta
+      if (updatedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        await lockAccount(username); // Bloquear la cuenta
+        return res.status(400).json({
+          msg: errorMessages.accountLocked,
+        });
+      }
+    
+      return res.status(400).json({
+        msg: errorMessages.incorrectPassword(updatedLoginAttempts),
+      });
+    }
+
+    // Si la contraseña es válida, restablecer los intentos de inicio de sesión
+    await Verification.update(
+      { loginAttempts: 0 },
+      { where: { userId: user.id } }
+    );
+
+    if (user.verification.blockExpiration) {
+      const currentDate = new Date();
+      if (user.verification.blockExpiration > currentDate) {
+        const timeLeft = Math.ceil((user.verification.blockExpiration.getTime() - currentDate.getTime()) / (60 * 1000));
+        return res.status(400).json({
+          msg: `La cuenta está bloqueada temporalmente debido a múltiples intentos fallidos. Inténtalo de nuevo más tarde. Tiempo restante: ${timeLeft} minutos`,
+        });
+      }
+    }
+
+    // Generar un token de autenticación
+    const token = jwt.sign(
+      {
+        username: username,
+        rol: user.rol,
+      },
+      process.env.SECRET_KEY || 'pepito123'
+    );
+
+    // Devolver el token y el rol del usuario
+    return res.json({
+      msg: successMessages.userLoggedIn,
+      token: token,
+      rol: user.rol,
+    });
+  } catch (error) {
+    // Manejar errores de base de datos
+    res.status(500).json({
+      msg: errorMessages.databaseError,
+      error,
+    });
+  }
+};
+
+
+/**
+ * Desbloquear la cuenta de un usuario en base a su nombre de usuario.
+ * @async
+ * @param {string} username - El nombre de usuario del usuario cuya cuenta se desbloqueará.
+ * @returns {Promise<void>} No devuelve ningún valor explícito, pero desbloquea la cuenta del usuario si es encontrado en la base de datos.
+ */
+async function unlockAccount(username: any) {
+  try {
+    // Buscar al usuario en la base de datos por su nombre de usuario y cargar información de verificación asociada.
+    const user = await Auth.findOne({ 
+      where: { username: username },
+      include: [Verification],
+    });
+
+    // Verificar si el usuario existe en la base de datos.
+    if (!user) {
+      console.error('Usuario no encontrado');
+      return;
+    }
+
+    // Restablecer el número de intentos de inicio de sesión fallidos a cero en la tabla Verification.
+    await Promise.all([
+      Verification.update(
+        { loginAttempts: 0 },
+        { where: { userId: user.id } }
+      ),
+    ]);
+  } catch (error) {
+    console.error('Error al desbloquear la cuenta:', error);
+  }
+}
+
+
+
+/**
+ * Bloquea la cuenta de un usuario después de múltiples intentos fallidos de inicio de sesión.
+ * @async
+ * @param {string} username - El nombre de usuario del usuario cuya cuenta se bloqueará.
+ * @returns {Promise<void>} No devuelve ningún valor explícito, pero bloquea la cuenta del usuario si es encontrado en la base de datos.
+ */
+async function lockAccount(username: any) {
+  try {
+    // Buscar al usuario en la base de datos por su nombre de usuario y cargar información de verificación asociada.
+    const user = await Auth.findOne({ 
+      where: { username: username },
+      include: [Verification],
+    });
+
+    // Verificar si el usuario existe en la base de datos.
+    if (!user) {
+      console.error('Usuario no encontrado');
+      return;
+    }
+
+    // Calcular la fecha de expiración del bloqueo (3 minutos a partir de la fecha y hora actual).
+    const currentDate = new Date();
+    const expirationDate = new Date(currentDate.getTime() + 3 * 60 * 1000); // Bloqueo por 3 minutos
+
+    // Actualizar la información en las tablas 'Auth' y 'Verification' para reflejar el bloqueo de la cuenta.
+    await Promise.all([
+      Auth.update(
+        { 
+          loginAttempts: MAX_LOGIN_ATTEMPTS, 
+          verificationCodeExpiration: expirationDate,
+          blockExpiration: expirationDate  // Actualiza la fecha de expiración de bloqueo
+        },
+        { where: { username: username } }
+      ),
+      Verification.update(
+        { 
+          loginAttempts: MAX_LOGIN_ATTEMPTS, 
+          verificationCodeExpiration: expirationDate,
+          blockExpiration: expirationDate  // Actualiza la fecha de expiración de bloqueo
+        },
+        { where: { userId: user.id } }
+      ),
+    ]);
+  } catch (error) {
+    console.error('Error al bloquear la cuenta:', error);
+  }
+}.
+│   │	│    │		   └── /randomPassword
+│   │   │    │                        └── passwordResetEmailController.ts:import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
+import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
+import { Auth, AuthModel } from '../../../../models/authModel';
+import { Verification, VerificationModel } from '../../../../models/verificationModel'; // Importa el modelo de verificación
+import { errorMessages, successMessages } from '../../../../middleware/messages';
+
+const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_REGEX_NUMBER = /\d/;
+const PASSWORD_REGEX_UPPERCASE = /[A-Z]/;
+const PASSWORD_REGEX_LOWERCASE = /[a-z]/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PASSWORD_REGEX_SPECIAL = /[&$@_/-]/;
+
+/**
+ * Envía un correo electrónico de recuperación de contraseña con una nueva contraseña aleatoria.
+ * @param {string} email - Dirección de correo electrónico del destinatario.
+ * @param {string} username - Nombre de usuario del destinatario.
+ * @param {string} randomPassword - Nueva contraseña aleatoria generada.
+ * @returns {Promise<boolean>} - Indica si el correo de recuperación de contraseña se envió con éxito.
+ */
+export const sendPasswordResetEmail = async (email: string, username: string, randomPassword: string): Promise<boolean> => {
+    try {
+        // Obtener la ruta absoluta del archivo de plantilla de correo electrónico
+        const templatePath = path.join(__dirname, '../../..', 'templates', 'randomPasswordEmail.html');
+
+        // Leer la plantilla HTML desde el archivo
+        const emailTemplate = fs.readFileSync(templatePath, 'utf-8');
+
+        // Reemplazar el marcador de posición {{ username }} con el nombre de usuario real
+        // y {{ randomPassword }} con la nueva contraseña aleatoria
+        const personalizedEmail = emailTemplate.replace('{{ username }}', username).replace('{{ randomPassword }}', randomPassword);
+
+        // Crear el transporte de nodemailer para enviar correos electrónicos
+        const transporter = nodemailer.createTransport({
+            service: 'gmail', // Usar el servicio de correo Gmail
+            auth: {
+                user: process.env.MAIL_USER, // Nombre de usuario del remitente
+                pass: process.env.MAIL_PASS, // Contraseña del remitente
+            },
+            secure: true, // Usar una conexión segura
+        });
+
+        // Configurar las opciones del correo electrónico
+        const mailOptions = {
+            from: process.env.MAIL_USER, // Dirección de correo del remitente
+            to: email, // Dirección de correo del destinatario
+            subject: 'Recuperación de Contraseña', // Asunto del correo
+            html: personalizedEmail, // Contenido personalizado del correo en formato HTML
+        };
+
+        // Enviar el correo de recuperación de contraseña
+        await transporter.sendMail(mailOptions);
+
+        return true; // Indicar que el correo de recuperación de contraseña se envió con éxito
+    } catch (error) {
+        console.error('Error al enviar el correo de recuperación de contraseña:', error);
+        return false; // Indicar que hubo un error al enviar el correo de recuperación de contraseña
+    }
+};
+
+
+
+/**
+ * Solicita la recuperación de contraseña para un usuario específico.
+ * @param {Request} req - Objeto de solicitud de Express.
+ * @param {Response} res - Objeto de respuesta de Express.
+ * @returns {Promise<void>} - Responde con un mensaje y puede enviar un correo electrónico de recuperación de contraseña.
+ */
+export const requestPasswordReset = async (req: Request, res: Response) => {
+    const { usernameOrEmail } = req.body;
+
+        // Verifica si se proporcionó un nombre de usuario o una dirección de correo electrónico
+
+    if (!usernameOrEmail) {
+        return res.status(400).json({
+            msg: errorMessages.missingUsernameOrEmail,
+        });
+    }
+
+    try {
+                // Buscar al usuario en la base de datos según el nombre de usuario o correo electrónico
+
+        let user: AuthModel | null = null;
+
+        if (EMAIL_REGEX.test(usernameOrEmail)) {
+            user = await Auth.findOne({ where: { email: usernameOrEmail }, include: [Verification] });
+        } else {
+            user = await Auth.findOne({ where: { username: usernameOrEmail }, include: [Verification] });
+        }
+
+                // Verificar si el usuario no existe
+
+
+        if (!user) {
+            return res.status(404).json({
+                msg: errorMessages.userNotFound,
+            });
+        }
+
+        // Obtener el registro de verificación asociado al usuario
+
+        const verification: VerificationModel | null = (user as any).verification;
+        // Verificar si la cuenta del usuario no está verificada
+
+        if (!verification || !verification.isEmailVerified || !verification.isPhoneVerified) {
+            return res.status(400).json({
+                msg: errorMessages.unverifiedAccount,
+            });
+        }
+
+        // Generar una nueva contraseña aleatoria
+        const randomPassword = generateRandomPassword(8);
+
+        // Establecer un tiempo de expiración para la contraseña aleatoria (5 minutos)
+
+        const expirationTime = new Date();
+        expirationTime.setMinutes(expirationTime.getMinutes() + 5);
+
+        // Actualizar la contraseña aleatoria y la fecha de expiración en el registro de verificación
+
+        verification.randomPassword = randomPassword;
+        verification.verificationCodeExpiration = expirationTime;
+        await verification.save();
+
+        // Programar una tarea para eliminar la contraseña aleatoria después de 24 minutos
+        setTimeout(async () => {
+            verification.randomPassword = ''; // Asignar una cadena vacía en lugar de null
+            await verification.save();
+        }, 24 * 60 * 60 * 1000); // 24 horas en milisegundos
+
+        // Enviar un correo de recuperación de contraseña al usuario
+        const emailSent = await sendPasswordResetEmail(user.email, user.username, randomPassword);
+
+        // Responder con un mensaje de éxito
+        res.json({
+            msg: successMessages.passwordResetEmailSent,
+        });
+    } catch (error) {
+
+        // Manejar errores y responder con un mensaje de error en caso de fallo
+        console.error('Error al solicitar recuperación de contraseña:', error);
+        res.status(500).json({
+            msg: errorMessages.serverError,
+            error: error,
+        });
+    }
+};
+
+
+
+/**
+ * Restablece la contraseña de un usuario.
+ * @param {Request} req - Objeto de solicitud de Express.
+ * @param {Response} res - Objeto de respuesta de Express.
+ * @returns {Promise<void>} - Responde con un mensaje indicando si la contraseña se restableció con éxito.
+ */
+export const resetPassword = async (req: Request, res: Response) => {
+    const { usernameOrEmail, randomPassword, newPassword } = req.body;
+
+    try {
+
+        // Buscar al usuario en la base de datos según el nombre de usuario o correo electrónico
+        let user: AuthModel | null = null;
+
+        if (EMAIL_REGEX.test(usernameOrEmail)) {
+            user = await Auth.findOne({ where: { email: usernameOrEmail }, include: [Verification] });
+        } else {
+            user = await Auth.findOne({ where: { username: usernameOrEmail }, include: [Verification] });
+        }
+        
+        // Verificar si el usuario no existe
+        if (!user) {
+            return res.status(404).json({
+                msg: errorMessages.userNotFound,
+            });
+        }
+
+        // Obtener el registro de verificación asociado al usuario
+        const verification: VerificationModel | null = (user as any).verification;
+
+        // Verificar si la cuenta del usuario no está verificada
+        if (!verification || !verification.isEmailVerified || !verification.isPhoneVerified) {
+            return res.status(400).json({
+                msg: errorMessages.unverifiedAccount,
+            });
+        }
+
+        // Verificar si la contraseña aleatoria y el tiempo de expiración son válidos
+        if (verification.randomPassword !== randomPassword || verification.verificationCodeExpiration < new Date()) {
+            return res.status(400).json({
+                msg: errorMessages.invalidRandomPassword,
+            });
+        }
+
+        // Validar que la nueva contraseña cumpla con las reglas
+        if (newPassword.length < PASSWORD_MIN_LENGTH) {
+            return res.status(400).json({
+                msg: errorMessages.passwordTooShort,
+            });
+        }
+
+        if (!PASSWORD_REGEX_NUMBER.test(newPassword)) {
+            return res.status(400).json({
+                msg: errorMessages.passwordNoNumber,
+            });
+        }
+
+        if (!PASSWORD_REGEX_UPPERCASE.test(newPassword)) {
+            return res.status(400).json({
+                msg: errorMessages.passwordNoUppercase,
+            });
+        }
+
+        if (!PASSWORD_REGEX_LOWERCASE.test(newPassword)) {
+            return res.status(400).json({
+                msg: errorMessages.passwordNoLowercase,
+            });
+        }
+
+        if (!PASSWORD_REGEX_SPECIAL.test(newPassword)) {
+            return res.status(400).json({
+                msg: errorMessages.passwordNoSpecialChar,
+            });
+        }
+
+        // Encriptar la nueva contraseña y actualizarla en el usuario
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        user.password = hashedPassword;
+
+        // Limpiar la contraseña aleatoria y actualizar la fecha de expiración en el registro de verificación
+        verification.randomPassword = '';
+        verification.verificationCodeExpiration = new Date();
+
+        // Guardar los cambios en el usuario y en el registro de verificación
+        await Promise.all([user.save(), verification.save()]);
+        
+        // Responder con un mensaje de éxito
+        res.json({
+            msg: successMessages.passwordUpdated,
+        });
+    } catch (error) {
+
+        // Manejar errores y responder con un mensaje de error en caso de fallo
+        console.error('Error al resetear la contraseña:', error);
+        res.status(500).json({
+            msg: errorMessages.serverError,
+            error: error,
+        });
+    }
+};
+
+
+
+
+/**
+ * Genera una contraseña aleatoria.
+ * @param {number} length - Longitud de la contraseña generada.
+ * @returns {string} - Contraseña aleatoria.
+ */
+function generateRandomPassword(length: number): string {
+    // Caracteres válidos para la contraseña
+    const characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    
+    let randomPassword = ''; // Inicializa la contraseña aleatoria como una cadena vacía
+
+    // Genera caracteres aleatorios hasta alcanzar la longitud deseada
+    for (let i = 0; i < length; i++) {
+        const randomIndex = Math.floor(Math.random() * characters.length); // Genera un índice aleatorio
+        randomPassword += characters.charAt(randomIndex); // Añade el carácter correspondiente a la contraseña
+    }
+
+    return randomPassword; // Retorna la contraseña aleatoria generada
+}.
+│   │	│    ├── /email
+│   │   │    │	  └── emailVerificationController.ts:
+│   │   │    └── /phone
+│   │   │    	  └── phoneVerificationController.ts:
+│   │   │  
+│   │ 	└── /templates
+│   │	       ├── randomPasswordEmail.html:
+│   │          └── verificationEmail.html:
+│   ├── /database
+│   │   └── connection.ts:
+
+import { Sequelize } from "sequelize";
+
+
+const sequelize = new Sequelize('pruebavs1', 'root', 'admin123', {
+    host: 'localhost',
+    dialect: 'mysql',
+});
+
+export default sequelize;.
+│   ├── /middlewares 
+│   │   ├── messages.ts:
+│   │   ├── validate-role.ts:
+│   │   └── validate-token.ts:.
+│   ├── /models
+│   │   ├── verificationModel.ts:import { DataTypes, Model } from 'sequelize';
+import sequelize from '../database/connection';
+import { Auth } from './authModel';
+
+
+// Modelo para la verificación de usuarios
+export interface VerificationModel extends Model {
+  id: number;
+  isVerified: boolean;
+  isEmailVerified: boolean;
+  verificationCode: string;
+  loginAttempts: number;
+  verificationCodeExpiration: Date;
+  randomPassword: string;
+  isPhoneVerified: boolean;
+}
+
+export const Verification = sequelize.define<VerificationModel>('verification', {
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    unique: true,
+    references: {
+      model: 'auths', // Este debe ser el nombre de la tabla en tu base de datos
+      key: 'id', // La columna que se usará como clave primaria
+    }
+  },
+  isVerified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  isEmailVerified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  verificationCode: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+  },
+  loginAttempts: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+  },
+  blockExpiration: {
+    type: DataTypes.DATE,
+  },
+  verificationCodeExpiration: {
+    type: DataTypes.DATE,
+  },
+  randomPassword: {
+    type: DataTypes.STRING,
+  },
+  isPhoneVerified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+});
+
+Auth.hasOne(Verification, { foreignKey: 'userId' });
+Verification.belongsTo(Auth, { foreignKey: 'userId' });.
+│   │   └── authModel.ts:import { DataTypes, Model } from 'sequelize';
+import sequelize from '../database/connection';
+import { Verification } from './verificationModel';
+// Modelo para la autenticación de usuarios
+export interface AuthModel extends Model {
+  id: number;
+  username: string;
+  password: string;
+  email: string;
+  rol: string;
+}
+
+export const Auth = sequelize.define<AuthModel>('auth', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  username: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  password: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  email: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  phoneNumber: {
+    type: DataTypes.STRING,
+    allowNull: true, // Asegúrate de que el campo pueda ser nulo
+    unique: true,
+  },
+  rol: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+});.
+│   ├── /routes
+│   │	    ├── /singin
+│   │       │    └── singinVerificationRoutes.ts:
+│   │	    ├── /login
+│   │       │    └── loginVerificationRoutes.ts:
+import { Router } from "express";
+import { loginUser } from "../../../controllers/authentication/login/loginController";
+import validateRole from "../../../middleware/validateRole";
+import validateToken from "../../../middleware/validateToken";
+
+const router = Router();
+
+/**
+ * POST /api/user/login
+ *  Ruta para que los usuarios inicien sesión.
+ *  Público
+ */ 
+router.post('/login', loginUser);
+
+/**
+ *  GET /api/user/admin
+ *  Ruta protegida para los administradores.
+ *  Privado (solo para usuarios con rol 'admin')
+ */
+router.get('/admin', validateToken, validateRole('admin'), (req, res) => {
+    res.send('Bienvenido, eres un administrador');
+});
+
+/**
+ *  GET /api/user/user
+ *  Ruta protegida para los usuarios normales.
+ *  Privado (solo para usuarios con rol 'user')
+ */
+router.get('/user', validateToken, validateRole('user'), (req, res) => {
+    res.send('Bienvenido, eres un usuario normal');
+});
+
+export default router;.
+│   │	    │		   └── /randomPassword
+│   │       │                        └── passwordResetEmailRoutes.ts:
+import { Router } from "express";
+import { requestPasswordReset, resetPassword } from "../../../../controllers/authentication/login/passwordReset/passwordResetEmailController";
+import validateToken from "../../../../middleware/validateToken";
+
+const router = Router();
+
+/**
+ * POST /api/user/forgot-password
+ * Ruta para solicitar un correo electrónico de recuperación de contraseña.
+ * Público
+ */
+router.post('/forgot-password', requestPasswordReset);
+   
+/**
+ * POST /api/user/reset-password
+ * Ruta para cambiar la contraseña después de recibir el correo de recuperación.
+ * Público
+ */
+router.post('/reset-password', validateToken, resetPassword);
+
+export default router;
+.
+│   │	    ├── /email
+│   │       │	   └── emailVerificationRoutes.ts:
+│   │       └── /phone
+│   │         	    └── phoneVerificationRoutes.ts:
+│   │
+│   ├── /utils
+│   │  	└─ /authentication
+│   │        └── generarteCode.ts:
+
+│   ├── index.ts:
+│   └── server.ts:/**
+ * @file server.ts
+ * @description Clase que representa el servidor de la aplicación.
+ */
+
+import express, { Application } from 'express';
+import cors from 'cors';
+import signinRoutes from "./routes/authentication/singin/singinVerificationRoutes"; // Importar las rutas de signin
+import loginRoutes from "./routes/authentication/login/loginVerificationRoutes"; // Importar las rutas de login
+import randomPass from "./routes/authentication/login/PasswordReset/passwordResetEmailRoutes"; // Importar las rutas de login
+import emailVerificationRoutes from './routes/authentication/email/emailVerificationRoutes';
+import phoneVerificationRouter from './routes/authentication/phone/phoneVerificationRoutes';
+import countryRoutes from './routes/authentication/pais/countryRoutes';
+
+import { Auth } from './models/authModel';
+import { Country } from './models/paisModel';
+import { Verification } from './models/verificationModel';
+
+class Server {
+
+    private app: Application;
+    private port: string;
+
+    /**
+     * Constructor de la clase Server.
+     */
+    constructor() {
+        this.app = express();
+        this.port = process.env.PORT || '3010';
+        this.listen();
+        this.middlewares();
+        this.routes();
+        this.dbConnect();
+    }
+
+    /**
+     * Inicia el servidor y escucha en el puerto especificado.
+     */
+    listen() {
+        this.app.listen(this.port, () => {
+            console.log('Aplicacion corriendo en el puerto ' + this.port);
+        })
+    }
+
+    /**
+     * Configura las rutas de la aplicación.
+     */
+    routes() {
+        this.app.use('/api/auth', signinRoutes, loginRoutes,randomPass, emailVerificationRoutes, phoneVerificationRouter, countryRoutes);
+    }
+
+    /**
+     * Configura los middlewares de la aplicación.
+     */
+    middlewares() {
+        // Parseo body  
+        this.app.use(express.json()); 
+
+        // Cors
+        this.app.use(cors());
+    }
+
+    /**
+     * Conecta a la base de datos y sincroniza los modelos de Product y User.
+     */ 
+    async dbConnect() {
+        try {
+            await Auth.sync();
+            await Verification.sync();
+            await Country.sync();
+        } catch (error) {
+            console.error('Unable to connect to the database:', error);
+        }
+    }
+}
+
+export default Server;.
+├── .env:PORT ='3010'
+SECRET_KEY ='syXD56nMIs8^'
+MAIL_USER= quehaypahacer49@gmail.com
+MAIL_PASS= zpqlivkvzbkgkozs
+TWILIO_ACCOUNT_SID=AC19a66dcba6515b117df6c7e060784907
+TWILIO_AUTH_TOKEN=a480696bd6cb6258ac88b9bbbaf2954b
+TWILIO_PHONE_NUMBER=+12057196866.
+├── .gitignore
+├── package-lock.json
+└── package.json:

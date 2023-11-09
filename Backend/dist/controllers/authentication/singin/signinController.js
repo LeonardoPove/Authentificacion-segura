@@ -18,7 +18,8 @@ const authModel_1 = require("../../../models/authModel");
 const messages_1 = require("../../../middleware/messages");
 const emailVerificationController_1 = require("../email/emailVerificationController");
 const generateCode_1 = require("../../../utils/generateCode");
-const PASSWORD_MIN_LENGTH = 8;
+const verificationModel_1 = require("../../../models/verificationModel");
+const PASSWORD_MIN_LENGTH = 10;
 const PASSWORD_REGEX_NUMBER = /\d/;
 const PASSWORD_REGEX_UPPERCASE = /[A-Z]/;
 const PASSWORD_REGEX_LOWERCASE = /[a-z]/;
@@ -63,14 +64,14 @@ const newUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         });
     }
     //7. Validamos si el usuario ya existe en la base de datos
-    const user = yield authModel_1.User.findOne({ where: { username: username } });
+    const user = yield authModel_1.Auth.findOne({ where: { username: username } });
     if (user) {
         return res.status(400).json({
             msg: messages_1.errorMessages.userExists(username),
         });
     }
     //7. Validamos si el usuario ya existe en la base de datos
-    const useremail = yield authModel_1.User.findOne({ where: { email: email } });
+    const useremail = yield authModel_1.Auth.findOne({ where: { email: email } });
     if (useremail) {
         return res.status(400).json({
             msg: messages_1.errorMessages.userEmailExists(email),
@@ -85,14 +86,19 @@ const newUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         const expirationDate = new Date();
         expirationDate.setHours(expirationDate.getHours() + VERIFICATION_CODE_EXPIRATION_HOURS);
         //10. Guardar usuario en la base de datos con el código de verificación y fecha de expiración
-        yield authModel_1.User.create({
+        const newUser = yield authModel_1.Auth.create({
             username: username,
             password: hashedPassword,
             email: email,
             rol: rol,
+        });
+        // ...
+        // Crear la entrada de verificación asociada al usuario
+        yield verificationModel_1.Verification.create({
+            isVerified: false,
             verificationCode: verificationCode,
             verificationCodeExpiration: expirationDate,
-            isVerified: false,
+            userId: newUser.id, // Usar el ID del usuario recién creado
         });
         // Enviar el código de verificación por correo electrónico
         const verificationEmailSent = yield (0, emailVerificationController_1.sendVerificationEmail)(email, username, verificationCode);

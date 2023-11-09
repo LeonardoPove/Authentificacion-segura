@@ -1,0 +1,4 @@
+nos falta agregar la fecha de expiracion de la contraseña random que dure
+un tiempo en la base de datos y se elimine si n ose utiliza 
+
+2- nos falta ya agreagr lo que va en el admin y en el user 

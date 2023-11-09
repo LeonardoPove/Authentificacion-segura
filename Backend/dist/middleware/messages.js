@@ -7,7 +7,7 @@ exports.errorMessages = {
     userExists: (username) => `Ya existe un usuario con el nombre ${username}`,
     databaseError: 'Upps ocurrió un error en la base de datos',
     invalidEmail: 'La dirección de correo electrónico no es válida',
-    passwordTooShort: 'La contraseña debe tener al menos 8 caracteres',
+    passwordTooShort: 'La contraseña debe tener al menos 10 caracteres',
     passwordNoNumber: 'La contraseña debe contener al menos un número.',
     passwordNoUppercase: 'La contraseña debe contener al menos una letra mayúscula.',
     passwordNoLowercase: 'La contraseña debe contener al menos una letra minúscula.',
@@ -17,11 +17,13 @@ exports.errorMessages = {
     userNotVerified: 'El usuario aún no ha sido verificado. Verifica tu correo electrónico para activar tu cuenta.',
     accountLocked: 'La cuenta está bloqueada temporalmente debido a múltiples intentos fallidos. Inténtalo de nuevo más tarde.',
     incorrectPassword: (attempts) => `Contraseña incorrecta. Intentos fallidos: ${attempts}`,
+    verificationCodeNotFound: `Codigo a expirado registrate de nuevo `,
     // Errores de validación de roles y tokens
     tokenNotProvided: 'Acceso denegado, token no proporcionado',
     accessDenied: 'Acceso denegado, no tienes permisos para acceder a esta ruta',
     invalidToken: 'Token no válido',
     accessDeniedNoToken: 'Acceso denegado',
+    serverError: 'servidor error',
     // Errores de verificación de usuario   
     userAlreadyVerified: 'El usuario ya ha sido verificado previamente',
     verificationCodeExpired: 'El código de verificación ha expirado. Registra una nueva cuenta para obtener un nuevo código.',
@@ -45,7 +47,8 @@ exports.errorMessages = {
     invalidNewPassword: 'contraseña lol',
     invalidRandomPassworde: 'ya expiro la contraseña',
     incorrectPasswordWithAttempts: 'se requiere la contraseña normal',
-    incorrectRandomPassword: 'la contraseña no es valida'
+    incorrectRandomPassword: 'la contraseña no es valida',
+    passwordNoSpecialChar: 'La contraseña debe contener al menos uno de los siguientes signos: & $ @ _ - /',
 };
 exports.successMessages = {
     // Éxitos de registro

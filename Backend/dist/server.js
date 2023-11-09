@@ -26,13 +26,14 @@ const phoneVerificationRoutes_1 = __importDefault(require("./routes/authenticati
 const countryRoutes_1 = __importDefault(require("./routes/authentication/pais/countryRoutes"));
 const authModel_1 = require("./models/authModel");
 const paisModel_1 = require("./models/paisModel");
+const verificationModel_1 = require("./models/verificationModel");
 class Server {
     /**
      * Constructor de la clase Server.
      */
     constructor() {
         this.app = (0, express_1.default)();
-        this.port = process.env.PORT || '3009';
+        this.port = process.env.PORT || '3010';
         this.listen();
         this.middlewares();
         this.routes();
@@ -67,7 +68,8 @@ class Server {
     dbConnect() {
         return __awaiter(this, void 0, void 0, function* () {
             try {
-                yield authModel_1.User.sync();
+                yield authModel_1.Auth.sync();
+                yield verificationModel_1.Verification.sync();
                 yield paisModel_1.Country.sync();
             }
             catch (error) {

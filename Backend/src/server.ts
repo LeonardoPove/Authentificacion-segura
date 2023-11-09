@@ -12,8 +12,9 @@ import emailVerificationRoutes from './routes/authentication/email/emailVerifica
 import phoneVerificationRouter from './routes/authentication/phone/phoneVerificationRoutes';
 import countryRoutes from './routes/authentication/pais/countryRoutes';
 
-import { User } from './models/authModel';
+import { Auth } from './models/authModel';
 import { Country } from './models/paisModel';
+import { Verification } from './models/verificationModel';
 
 class Server {
 
@@ -25,7 +26,7 @@ class Server {
      */
     constructor() {
         this.app = express();
-        this.port = process.env.PORT || '3009';
+        this.port = process.env.PORT || '3010';
         this.listen();
         this.middlewares();
         this.routes();
@@ -64,7 +65,8 @@ class Server {
      */ 
     async dbConnect() {
         try {
-            await User.sync();
+            await Auth.sync();
+            await Verification.sync();
             await Country.sync();
         } catch (error) {
             console.error('Unable to connect to the database:', error);

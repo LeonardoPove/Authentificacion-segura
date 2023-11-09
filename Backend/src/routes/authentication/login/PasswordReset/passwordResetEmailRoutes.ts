@@ -11,7 +11,7 @@ const router = Router();
  * Público
  */
 router.post('/forgot-password', requestPasswordReset);
-
+   
 /**
  * POST /api/user/reset-password
  * Ruta para cambiar la contraseña después de recibir el correo de recuperación.

@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
-import { User } from '../../../models/authModel';
+import { Auth } from '../../../models/authModel';
 import { errorMessages, successMessages } from '../../../middleware/messages';
 import { sendVerificationEmail } from '../email/emailVerificationController';
 import { generateVerificationCode } from '../../../utils/generateCode';
+import { Verification } from '../../../models/verificationModel';
 
 
-const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MIN_LENGTH = 10;
 const PASSWORD_REGEX_NUMBER = /\d/;
 const PASSWORD_REGEX_UPPERCASE = /[A-Z]/;
 const PASSWORD_REGEX_LOWERCASE = /[a-z]/;
@@ -60,7 +61,7 @@ export const newUser = async (req: Request, res: Response) => {
   }
 
   //7. Validamos si el usuario ya existe en la base de datos
-  const user = await User.findOne({ where: { username: username } });
+  const user = await Auth.findOne({ where: { username: username } });
 
   if (user) {
     return res.status(400).json({
@@ -68,7 +69,7 @@ export const newUser = async (req: Request, res: Response) => {
     });
   }
   //7. Validamos si el usuario ya existe en la base de datos
-  const useremail = await User.findOne({ where: { email: email } });
+  const useremail = await Auth.findOne({ where: { email: email } });
 
   if (useremail) {
     return res.status(400).json({
@@ -83,20 +84,26 @@ export const newUser = async (req: Request, res: Response) => {
     const verificationCode = generateVerificationCode();
 
     //9. Calcular la fecha de expiración (agregar 24 horas a la fecha actual)
-    const expirationDate = new Date(); 
+    const expirationDate = new Date();
     expirationDate.setHours(expirationDate.getHours() + VERIFICATION_CODE_EXPIRATION_HOURS);
 
     //10. Guardar usuario en la base de datos con el código de verificación y fecha de expiración
-    await User.create({
+    const newUser = await Auth.create({
       username: username,
       password: hashedPassword,
       email: email,
       rol: rol,
-      verificationCode: verificationCode,
-      verificationCodeExpiration: expirationDate, // Guardar la fecha de expiración
-      isVerified: false,
-    });
+  });
 
+    // ...
+
+    // Crear la entrada de verificación asociada al usuario
+    await Verification.create({
+      isVerified: false,
+      verificationCode: verificationCode,
+      verificationCodeExpiration: expirationDate,
+      userId: newUser.id, // Usar el ID del usuario recién creado
+    });
     // Enviar el código de verificación por correo electrónico
     const verificationEmailSent = await sendVerificationEmail(email, username, verificationCode);
 

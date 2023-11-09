@@ -1,23 +1,16 @@
 import { DataTypes, Model } from 'sequelize';
 import sequelize from '../database/connection';
-
-export interface UserModel extends Model {
+import { Verification } from './verificationModel';
+// Modelo para la autenticación de usuarios
+export interface AuthModel extends Model {
   id: number;
   username: string;
   password: string;
   email: string;
   rol: string;
-  isVerified: boolean;
-  isPhoneVerified:boolean,
-  isEmailVerified: boolean;
-  verificationCode: string;
-  loginAttempts: number;
-  verificationCodeExpiration: any;
-  randomPassword: any;
-
 }
 
-export const User = sequelize.define<UserModel>('user', {
+export const Auth = sequelize.define<AuthModel>('auth', {
   id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
@@ -37,45 +30,13 @@ export const User = sequelize.define<UserModel>('user', {
     allowNull: false,
     unique: true,
   },
+  phoneNumber: {
+    type: DataTypes.STRING,
+    allowNull: true, // Asegúrate de que el campo pueda ser nulo
+    unique: true,
+  },
   rol: {
     type: DataTypes.STRING,
     allowNull: false,
-  },
-  isVerified: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false,
-  },
-  isEmailVerified: { 
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false,
-  },
-  verificationCode: {
-    type: DataTypes.UUID,
-    defaultValue: DataTypes.UUIDV4,
-  },
-  loginAttempts: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
-  },
-  verificationCodeExpiration: {
-    type: DataTypes.DATE,
-  },
-  randomPassword: {
-    type: DataTypes.STRING,
-  },
-  
-  isPhoneVerified: {
-    type: DataTypes.BOOLEAN,
-    allowNull: false,
-    defaultValue: false,
-  },
-  phoneNumber: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    unique: true,
-
   },
 });

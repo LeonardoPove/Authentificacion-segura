@@ -18,17 +18,25 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const messages_1 = require("../../../middleware/messages");
+const verificationModel_1 = require("../../../models/verificationModel");
 const VERIFICATION_CODE_EXPIRATION_HOURS = 24;
-// Función para enviar el código de verificación por correo electrónico
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/**
+ * Envía un correo de verificación con un código personalizado.
+ * @param {string} email - Dirección de correo electrónico del destinatario.
+ * @param {string} username - Nombre de usuario asociado al correo.
+ * @param {string} verificationCode - Código de verificación generado.
+ * @returns {boolean} - True si el correo se envía con éxito, False si hay un error.
+ */
 const sendVerificationEmail = (email, username, verificationCode) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Obtener la ruta absoluta del archivo de plantilla
+        // Obtiene la ruta absoluta del archivo de plantilla de correo electrónico
         const templatePath = path_1.default.join(__dirname, '../..', 'templates', 'verificationEmail.html');
-        // Leer la plantilla HTML desde el archivo
+        // Lee la plantilla de correo electrónico desde el archivo
         const emailTemplate = fs_1.default.readFileSync(templatePath, 'utf-8');
-        // Reemplazar los placeholders {{ username }} y {{ verificationCode }} con los valores reales
+        // Reemplaza los marcadores {{ username }} y {{ verificationCode }} con los valores reales
         const personalizedEmail = emailTemplate.replace('{{ username }}', username).replace('{{ verificationCode }}', verificationCode);
-        // Crear el transporte de nodemailer globalmente para reutilizarlo
+        // Crea un transporte de nodemailer para reutilizarlo
         const transporter = nodemailer_1.default.createTransport({
             service: 'gmail',
             auth: {
@@ -37,110 +45,145 @@ const sendVerificationEmail = (email, username, verificationCode) => __awaiter(v
             },
             secure: true,
         });
+        // Registra en la consola el código de verificación enviado
+        console.log('Código de verificación enviado:', verificationCode);
         const mailOptions = {
             from: process.env.MAIL_USER,
             to: email,
             subject: 'Verificación de correo electrónico',
-            html: personalizedEmail, // Usar el contenido personalizado en el cuerpo del correo
+            html: personalizedEmail, // Utiliza el contenido personalizado en el cuerpo del correo
         };
-        // Enviar el correo de verificación
+        // Envía el correo de verificación
         yield transporter.sendMail(mailOptions);
-        return true; // Indicar que el correo de verificación fue enviado con éxito
+        return true; // Indica que el correo de verificación se envió con éxito
     }
     catch (error) {
         console.error('Error al enviar el correo de verificación:', error);
-        return false; // Indicar que hubo un error al enviar el correo de verificación
+        return false; // Indica que hubo un error al enviar el correo de verificación
     }
 });
 exports.sendVerificationEmail = sendVerificationEmail;
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/**
+* @function verifyUser
+* @description Verifica la autenticación del usuario mediante el código de verificación.
+* @param {Request} req - El objeto de solicitud de Express.
+* @param {Response} res - El objeto de respuesta de Express.
+* @returns {Promise<void>} Una promesa que resuelve cuando se completa la verificación.
+*/
 const verifyUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    // Extraer el nombre de usuario y el código de verificación del cuerpo de la solicitud.
     const { username, verificationCode } = req.body;
-    // Validamos si el usuario existe en la base de datos
-    const user = yield authModel_1.User.findOne({ where: { username: username } });
-    if (!user) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.userNotExists(username),
-        });
-    }
-    // Verificar si el usuario ya está verificado
-    if (user.isEmailVerified) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.userAlreadyVerified,
-        });
-    }
-    // Verificar si el código de verificación ha expirado
-    const currentDate = new Date();
-    if (user.verificationCodeExpiration && user.verificationCodeExpiration < currentDate) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.verificationCodeExpired,
-        });
-    }
-    // Verificar si el código de verificación es válido
-    if (user.verificationCode !== verificationCode) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.invalidVerificationCode,
-        });
-    }
-    // Actualizar el registro del usuario para marcarlo como verificado
     try {
-        yield authModel_1.User.update({ isEmailVerified: true }, { where: { username: username } });
-        // Si el número de teléfono también está verificado, actualizamos isVerified a true
-        if (user.isPhoneVerified) {
-            yield authModel_1.User.update({ isVerified: true }, { where: { username: username } });
+        // Buscar el usuario en la base de datos utilizando el nombre de usuario.
+        const user = yield authModel_1.Auth.findOne({ where: { username: username }, include: [verificationModel_1.Verification] });
+        // Si no se encuentra el usuario, responder con un mensaje de error.
+        if (!user) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.userNotExists(username),
+            });
         }
+        // Si el correo electrónico ya está verificado, responder con un mensaje de error.
+        if (user.isEmailVerified) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.userAlreadyVerified,
+            });
+        }
+        // Obtener la fecha actual.
+        const currentDate = new Date();
+        // Si el código de verificación ha expirado, responder con un mensaje de error.
+        if (user.verificationCodeExpiration && user.verificationCodeExpiration < currentDate) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.verificationCodeExpired,
+            });
+        }
+        // Comparar el código de verificación proporcionado con el almacenado en la base de datos.
+        if (user.verification.verificationCode !== verificationCode.trim()) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.invalidVerificationCode,
+            });
+        }
+        // Marcar el correo electrónico como verificado en la tabla Verification.
+        yield verificationModel_1.Verification.update({ isEmailVerified: true }, { where: { userId: user.id } });
+        if (user.isPhoneVerified) {
+            // Marcar el usuario como verificado en la tabla Verification si el teléfono también está verificado.
+            yield verificationModel_1.Verification.update({ isVerified: true }, { where: { userId: user.id } });
+        }
+        // Responder con un mensaje de éxito.
         res.json({
             msg: messages_1.successMessages.userVerified,
         });
     }
     catch (error) {
-        res.status(400).json({
+        // Si ocurre un error en la base de datos, responder con un mensaje de error y detalles del error.
+        res.status(500).json({
             msg: messages_1.errorMessages.databaseError,
             error,
         });
     }
 });
 exports.verifyUser = verifyUser;
-// Función para reenviar el código de verificación por correo electrónico
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/**
+ * Controlador para volver a enviar el código de verificación por correo electrónico.
+ * @param {Request} req - Objeto de solicitud de Express.
+ * @param {Response} res - Objeto de respuesta de Express.
+ * @returns {Response} - Respuesta JSON con un mensaje indicando el estado de la operación.
+ */
 const resendVerificationCode = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    // Extraer el nombre de usuario del cuerpo de la solicitud
     const { username } = req.body;
-    // Validamos si el usuario existe en la base de datos
-    const user = yield authModel_1.User.findOne({ where: { username: username } });
-    if (!user) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.userNotExists(username),
-        });
-    }
-    // Verificar si el usuario ya está verificado
-    if (user.isEmailVerified) {
-        return res.status(400).json({
-            msg: messages_1.errorMessages.userAlreadyVerified,
-        });
-    }
-    // Generar un nuevo código de verificación
-    const newVerificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    // Actualizar la información del usuario en la base de datos con el nuevo código y la nueva fecha de expiración
-    const expirationDate = new Date();
-    expirationDate.setHours(expirationDate.getHours() + VERIFICATION_CODE_EXPIRATION_HOURS);
     try {
-        yield authModel_1.User.update({
+        // Buscar el usuario en la base de datos, incluyendo su información de verificación
+        const user = yield authModel_1.Auth.findOne({ where: { username: username }, include: [verificationModel_1.Verification] });
+        // Si el usuario no existe, responder con un mensaje de error
+        if (!user) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.userNotExists(username),
+            });
+        }
+        // Si el usuario ya está verificado por correo electrónico, responder con un mensaje de error
+        if (user.verification.isEmailVerified) {
+            return res.status(400).json({
+                msg: messages_1.errorMessages.userAlreadyVerified,
+            });
+        }
+        // Generar un nuevo código de verificación
+        const newVerificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        // Calcular la fecha de expiración del nuevo código
+        const expirationDate = new Date();
+        expirationDate.setHours(expirationDate.getHours() + VERIFICATION_CODE_EXPIRATION_HOURS);
+        // Verificar si ya existe un registro de verificación para el usuario
+        let verificationRecord = yield verificationModel_1.Verification.findOne({ where: { userId: user.id } });
+        // Si no existe, crear uno
+        if (!verificationRecord) {
+            verificationRecord = yield verificationModel_1.Verification.create({
+                userId: user.id,
+            });
+        }
+        // Actualizar el código de verificación en la tabla 'Verification'
+        yield verificationRecord.update({
             verificationCode: newVerificationCode,
             verificationCodeExpiration: expirationDate,
-        }, { where: { username: username } });
-        // Enviar el nuevo código de verificación por correo electrónico
+        });
+        // Enviar el correo de verificación
         const emailSent = yield (0, exports.sendVerificationEmail)(user.email, user.username, newVerificationCode);
+        // Si el correo se envía con éxito, responder con un mensaje de éxito
         if (emailSent) {
             res.json({
                 msg: messages_1.successMessages.verificationCodeResent,
             });
         }
         else {
+            // Si hay un error al enviar el correo, responder con un mensaje de error
             res.status(500).json({
                 msg: messages_1.errorMessages.emailVerificationError,
             });
         }
     }
     catch (error) {
-        res.status(400).json({
+        // Si hay un error en la base de datos, responder con un mensaje de error y detalles del error
+        res.status(500).json({
             msg: messages_1.errorMessages.databaseError,
             error,
         });
